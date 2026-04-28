@@ -2,9 +2,15 @@
 
 use alloy_network::BlockResponse;
 use alloy_primitives::U256;
-use base_flashblocks::{FlashblocksAPI, PendingBlocksAPI};
+use alloy_rpc_types_engine::PayloadId;
+use base_common_flashblocks::{ExecutionPayloadFlashblockDeltaV1, Flashblock, Metadata};
+use base_flashblocks::{FlashblocksAPI, FlashblocksReceiver, FlashblocksState, PendingBlocksAPI};
 use base_flashblocks_node::test_harness::{FlashblockBuilder, FlashblocksBuilderTestHarness};
 use base_test_utils::Account;
+use metrics_util::{
+    MetricKind,
+    debugging::{DebugValue, DebuggingRecorder},
+};
 use reth_provider::{AccountReader, StateProviderFactory};
 
 #[tokio::test]
@@ -765,4 +771,57 @@ async fn test_progress_canonical_blocks_without_flashblocks() {
     assert_eq!(block_two.number, 2);
     assert_eq!(block_two.transaction_count(), 3);
     assert!(test.flashblocks.get_pending_blocks().get_block(true).is_none());
+}
+
+#[test]
+fn flashblock_queue_drops_increment_when_capacity_exceeded() {
+    const FLASHBLOCK_QUEUE_CAPACITY: usize = 1024;
+    const OVERFLOW_COUNT: usize = 10;
+
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+
+    metrics::with_local_recorder(&recorder, || {
+        let state = FlashblocksState::new(5);
+
+        for index in 0..(FLASHBLOCK_QUEUE_CAPACITY + OVERFLOW_COUNT) as u64 {
+            state.on_flashblock_received(test_flashblock(index));
+        }
+
+        let snapshot = snapshotter.snapshot().into_vec();
+        let drops = snapshot
+            .iter()
+            .find(|(ck, _, _, _)| {
+                ck.kind() == MetricKind::Counter
+                    && ck.key().name() == "reth_flashblocks.flashblock_queue_drops"
+            })
+            .map(|(_, _, _, v)| v)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected reth_flashblocks.flashblock_queue_drops counter to be registered \
+                     after queue saturation, but it was missing from the snapshot"
+                )
+            });
+
+        match drops {
+            DebugValue::Counter(value) => assert_eq!(
+                *value,
+                OVERFLOW_COUNT as u64,
+                "expected exactly {OVERFLOW_COUNT} drops after sending \
+                 {FLASHBLOCK_QUEUE_CAPACITY} + {OVERFLOW_COUNT} flashblocks into a queue with \
+                 capacity {FLASHBLOCK_QUEUE_CAPACITY}, got {value}",
+            ),
+            other => panic!("expected counter for flashblock_queue_drops, got {other:?}"),
+        }
+    });
+}
+
+fn test_flashblock(index: u64) -> Flashblock {
+    Flashblock {
+        payload_id: PayloadId::default(),
+        index,
+        base: None,
+        diff: ExecutionPayloadFlashblockDeltaV1::default(),
+        metadata: Metadata { block_number: 1 },
+    }
 }

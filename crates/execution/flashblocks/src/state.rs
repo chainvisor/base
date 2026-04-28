@@ -18,18 +18,23 @@ use tokio::sync::{
 
 use crate::{
     FlashblocksAPI, FlashblocksReceiver, PendingBlocks,
+    metrics::Metrics,
     processor::{StateProcessor, StateUpdate},
 };
 
 // Buffer 4s of flashblocks for flashblock_sender
 const BUFFER_SIZE: usize = 20;
 
+// Unified bounded processing queue. Flashblocks drop on saturation; canonical
+// blocks apply backpressure instead of being dropped.
+const FLASHBLOCK_QUEUE_CAPACITY: usize = 1024;
+
 /// Manages the pending flashblock state and processes incoming updates.
 #[derive(Debug)]
 pub struct FlashblocksState {
     pending_blocks: Arc<ArcSwapOption<PendingBlocks>>,
-    queue: mpsc::UnboundedSender<StateUpdate>,
-    rx: Arc<Mutex<mpsc::UnboundedReceiver<StateUpdate>>>,
+    queue: mpsc::Sender<StateUpdate>,
+    rx: Arc<Mutex<mpsc::Receiver<StateUpdate>>>,
     flashblock_sender: Sender<Arc<PendingBlocks>>,
     max_pending_blocks_depth: u64,
 }
@@ -40,13 +45,13 @@ impl FlashblocksState {
     /// The state is created without a client. Call [`start`](Self::start) with a client
     /// to spawn the state processor after the node is launched.
     pub fn new(max_pending_blocks_depth: u64) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel::<StateUpdate>();
+        let (queue, rx) = mpsc::channel::<StateUpdate>(FLASHBLOCK_QUEUE_CAPACITY);
         let pending_blocks: Arc<ArcSwapOption<PendingBlocks>> = Arc::new(ArcSwapOption::new(None));
         let (flashblock_sender, _) = broadcast::channel(BUFFER_SIZE);
 
         Self {
             pending_blocks,
-            queue: tx,
+            queue,
             rx: Arc::new(Mutex::new(rx)),
             flashblock_sender,
             max_pending_blocks_depth,
@@ -78,10 +83,10 @@ impl FlashblocksState {
         });
     }
 
-    /// Handles a canonical block being received.
-    pub fn on_canonical_block_received(&self, block: RecoveredBlock<BaseBlock>) {
+    /// Handles a canonical block by waiting for queue capacity instead of dropping it.
+    pub async fn on_canonical_block_received(&self, block: RecoveredBlock<BaseBlock>) {
         let block_number = block.number;
-        match self.queue.send(StateUpdate::Canonical(block)) {
+        match self.queue.send(StateUpdate::Canonical(block)).await {
             Ok(_) => {
                 info!(message = "added canonical block to processing queue", block_number)
             }
@@ -96,15 +101,28 @@ impl FlashblocksReceiver for FlashblocksState {
     fn on_flashblock_received(&self, flashblock: Flashblock) {
         let flashblock_index = flashblock.index;
         let block_number = flashblock.metadata.block_number;
-        match self.queue.send(StateUpdate::Flashblock(flashblock)) {
+        match self.queue.try_send(StateUpdate::Flashblock(flashblock)) {
             Ok(_) => {
                 debug!(
                     message = "added flashblock to processing queue",
                     block_number, flashblock_index,
                 );
             }
-            Err(e) => {
-                error!(message = "could not add flashblock to processing queue", block_number, flashblock_index, error = %e);
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                Metrics::flashblock_queue_drops().increment(1);
+                warn!(
+                    message = "dropped flashblock because processing queue is full",
+                    block_number,
+                    flashblock_index,
+                    capacity = FLASHBLOCK_QUEUE_CAPACITY,
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                error!(
+                    message = "could not add flashblock to processing queue: receiver closed",
+                    block_number,
+                    flashblock_index,
+                );
             }
         }
     }

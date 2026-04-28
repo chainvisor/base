@@ -22,7 +22,7 @@ use reth_primitives::RecoveredBlock;
 use reth_provider::{BlockReaderIdExt, StateProviderFactory};
 use reth_revm::{State, database::StateProviderDatabase};
 use revm_database::states::bundle_state::BundleRetention;
-use tokio::sync::{Mutex, broadcast::Sender, mpsc::UnboundedReceiver};
+use tokio::sync::{Mutex, broadcast::Sender, mpsc::Receiver};
 
 use crate::{
     BlockAssembler, ExecutionError, FlashblockCache, PendingBlocks, PendingBlocksBuilder,
@@ -34,19 +34,19 @@ use crate::{
     },
 };
 
-/// Messages consumed by the state processor.
+/// A state update delivered over the unified processing queue.
 #[derive(Debug, Clone)]
 pub enum StateUpdate {
-    /// New canonical block to reconcile against pending state.
+    /// A canonical block from the chain.
     Canonical(RecoveredBlock<BaseBlock>),
-    /// Incoming flashblock payload to extend pending state.
+    /// A flashblock streamed from the builder.
     Flashblock(Flashblock),
 }
 
 /// Processes flashblocks and canonical blocks to keep pending state updated.
 #[derive(Debug, Clone)]
 pub struct StateProcessor<Client> {
-    rx: Arc<Mutex<UnboundedReceiver<StateUpdate>>>,
+    rx: Arc<Mutex<Receiver<StateUpdate>>>,
     pending_blocks: Arc<ArcSwapOption<PendingBlocks>>,
     max_depth: u64,
     client: Client,
@@ -62,24 +62,32 @@ where
         + Clone
         + 'static,
 {
-    /// Creates a new state processor wired to the provided channels and state.
+    /// Creates a new state processor wired to the provided channel and state.
     pub fn new(
         client: Client,
         pending_blocks: Arc<ArcSwapOption<PendingBlocks>>,
         max_depth: u64,
-        rx: Arc<Mutex<UnboundedReceiver<StateUpdate>>>,
+        rx: Arc<Mutex<Receiver<StateUpdate>>>,
         sender: Sender<Arc<PendingBlocks>>,
     ) -> Self {
         let cache = client
             .best_block_number()
             .map_or_else(|_| FlashblockCache::new(0), FlashblockCache::new);
 
-        Self { pending_blocks, client, max_depth, rx, sender, cache: Arc::new(Mutex::new(cache)) }
+        Self {
+            pending_blocks,
+            client,
+            max_depth,
+            rx,
+            sender,
+            cache: Arc::new(Mutex::new(cache)),
+        }
     }
 
-    /// Processes updates from the queue until the channel closes.
+    /// Processes queued canonical blocks and flashblocks in arrival order until the channel closes.
     pub async fn start(&self) {
-        while let Some(update) = self.rx.lock().await.recv().await {
+        let mut rx = self.rx.lock().await;
+        while let Some(update) = rx.recv().await {
             let prev_pending_blocks = self.pending_blocks.load_full();
             match update {
                 StateUpdate::Canonical(block) => {
@@ -114,12 +122,13 @@ where
                     debug!(
                         message = "processing flashblock",
                         block_number = flashblock.metadata.block_number,
-                        flashblock_index = flashblock.index
+                        flashblock_index = flashblock.index,
                     );
                     self.apply_flashblock(prev_pending_blocks, flashblock).await;
                 }
             }
         }
+        debug!(message = "processing queue closed, stopping processor");
     }
 
     async fn apply_flashblock(
@@ -132,6 +141,8 @@ where
             Ok(new_pending_blocks) => {
                 if let Some(ref pb) = new_pending_blocks {
                     _ = self.sender.send(Arc::clone(pb));
+                    Metrics::broadcast_receiver_count()
+                        .set(self.sender.receiver_count() as f64);
                 }
                 self.pending_blocks.swap(new_pending_blocks);
                 Metrics::block_processing_duration().record(start_time.elapsed());
@@ -378,7 +389,7 @@ where
             Some(pending_blocks) => State::builder()
                 .with_database(state_provider_db)
                 .with_bundle_update()
-                .with_bundle_prestate(pending_blocks.get_bundle_state())
+                .with_bundle_prestate(Arc::unwrap_or_clone(pending_blocks.get_bundle_state()))
                 .build(),
             None => State::builder().with_database(state_provider_db).with_bundle_update().build(),
         };
@@ -489,6 +500,8 @@ where
         pending_blocks_builder.with_bundle_state(db.take_bundle());
         pending_blocks_builder.with_state_overrides(state_overrides);
 
-        Ok(Some(Arc::new(pending_blocks_builder.build()?)))
+        let pending_blocks = pending_blocks_builder.build()?;
+        pending_blocks.record_metrics();
+        Ok(Some(Arc::new(pending_blocks)))
     }
 }

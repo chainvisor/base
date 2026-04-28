@@ -167,7 +167,7 @@ impl BaseNodeExtension for FlashblocksTestExtension {
                     while let Some(Ok(notification)) = canonical_stream.next().await {
                         let committed = notification.committed();
                         for block in committed.blocks_iter() {
-                            state_for_canonical.on_canonical_block_received(block.clone());
+                            state_for_canonical.on_canonical_block_received(block.clone()).await;
                         }
                     }
                 });
@@ -349,7 +349,7 @@ impl FlashblocksBuilderTestHarness {
             .expect("block exists")
             .try_into_recovered()
             .expect("able to recover block");
-        flashblocks.on_canonical_block_received(genesis_block);
+        flashblocks.on_canonical_block_received(genesis_block).await;
 
         Self { node, provider, flashblocks }
     }
@@ -481,7 +481,7 @@ impl FlashblocksBuilderTestHarness {
     /// Build a new canonical block with processing.
     pub async fn new_canonical_block(&mut self, user_transactions: Vec<BaseTransactionSigned>) {
         let block = self.new_canonical_block_without_processing(user_transactions).await;
-        self.flashblocks.on_canonical_block_received(block);
+        self.flashblocks.on_canonical_block_received(block).await;
         sleep(Duration::from_millis(SLEEP_TIME)).await;
     }
 }

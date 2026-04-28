@@ -4374,6 +4374,8 @@ dependencies = [
  "derive_more 2.1.1",
  "eyre",
  "futures",
+ "metrics",
+ "metrics-util",
  "rand 0.9.4",
  "rayon",
  "reth-chain-state",

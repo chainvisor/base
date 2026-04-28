@@ -105,7 +105,7 @@ impl MeteringCollector {
             self.last_processed = None;
         }
 
-        let flashblocks = pending.get_flashblocks();
+        let flashblocks = pending.flashblocks();
         if flashblocks.is_empty() {
             self.last_earliest_block = Some(earliest_block_number);
             return;
@@ -114,7 +114,7 @@ impl MeteringCollector {
         let latest_base_fee = pending.latest_header().base_fee_per_gas().unwrap_or_default();
         let mut base_fees_by_block =
             HashMap::from([(latest_position.block_number, latest_base_fee)]);
-        for flashblock in &flashblocks {
+        for flashblock in flashblocks {
             if let Some(base) = flashblock.base.as_ref() {
                 base_fees_by_block.insert(
                     flashblock.metadata.block_number,

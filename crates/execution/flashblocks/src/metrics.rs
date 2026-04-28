@@ -50,4 +50,16 @@ base_metrics::define_metrics! {
     bundle_state_clone_duration: histogram,
     #[describe("Size of bundle state being cloned (number of accounts)")]
     bundle_state_clone_size: histogram,
+    #[describe("Number of transactions tracked across all pending blocks HashMaps")]
+    pending_blocks_total_transactions: gauge,
+    #[describe("Number of unique accounts in pending blocks bundle state")]
+    pending_blocks_bundle_state_accounts: gauge,
+    #[describe("Estimated size of pending blocks bundle state in bytes")]
+    pending_blocks_bundle_state_size: gauge,
+    #[describe("Number of flashblocks retained in pending blocks")]
+    pending_blocks_flashblocks_count: gauge,
+    #[describe("Number of active flashblock broadcast subscribers")]
+    broadcast_receiver_count: gauge,
+    #[describe("Count of flashblocks dropped because the bounded processing queue was full")]
+    flashblock_queue_drops: counter,
 }

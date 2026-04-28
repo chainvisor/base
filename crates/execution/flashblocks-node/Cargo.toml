@@ -98,6 +98,8 @@ tracing-subscriber.workspace = true
 # misc
 rand.workspace = true
 rayon.workspace = true
+metrics.workspace = true
+metrics-util = { workspace = true, features = ["debugging"] }
 serde_json = { workspace = true, features = ["std"] }
 criterion = { workspace = true, features = ["async_tokio"] }
 

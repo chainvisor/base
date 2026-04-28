@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use alloy_consensus::{Header, Sealed, TxReceipt};
 use alloy_eips::BlockNumberOrTag;
@@ -48,10 +48,7 @@ pub struct PendingBlocksBuilder {
     transaction_results: HashMap<B256, ExecutionResult<BaseHaltReason>>,
     execution_times: HashMap<B256, u128>,
     state_root_times: HashMap<B256, u128>,
-
-    bundle_state: BundleState,
-
-    // Deferred error from `with_transaction` (e.g. duplicate hash). Surfaced from `build()`.
+    bundle_state: Arc<BundleState>,
     deferred_error: Option<BuildError>,
 }
 
@@ -80,7 +77,7 @@ impl PendingBlocksBuilder {
             execution_times: HashMap::new(),
             state_root_times: HashMap::new(),
             state_overrides: None,
-            bundle_state: BundleState::default(),
+            bundle_state: Arc::new(BundleState::default()),
             deferred_error: None,
         }
     }
@@ -166,10 +163,10 @@ impl PendingBlocksBuilder {
         self
     }
 
-    /// Sets the accumulated bundle state.
+    /// Sets the accumulated bundle state behind an [`Arc`] for cheap sharing.
     #[inline]
     pub fn with_bundle_state(&mut self, bundle_state: BundleState) -> &Self {
-        self.bundle_state = bundle_state;
+        self.bundle_state = Arc::new(bundle_state);
         self
     }
 
@@ -259,7 +256,7 @@ pub struct PendingBlocks {
     execution_times: HashMap<B256, u128>,
     state_root_times: HashMap<B256, u128>,
 
-    bundle_state: BundleState,
+    bundle_state: Arc<BundleState>,
 }
 
 impl PendingBlocks {
@@ -331,6 +328,12 @@ impl PendingBlocks {
         self.flashblocks.clone()
     }
 
+    /// Returns the flashblocks as a borrowed slice.
+    #[inline]
+    pub fn flashblocks(&self) -> &[Flashblock] {
+        &self.flashblocks
+    }
+
     /// Returns the EVM state for a transaction.
     pub fn get_transaction_state(&self, hash: &B256) -> Option<EvmState> {
         self.transaction_state.get(hash).cloned()
@@ -341,19 +344,19 @@ impl PendingBlocks {
         self.transaction_senders.get(tx_hash).copied()
     }
 
-    /// Returns a clone of the bundle state.
-    ///
-    /// NOTE: This clones the entire `BundleState`, which contains a `HashMap` of all touched
-    /// accounts and their storage slots. The cost scales with the number of accounts and
-    /// storage slots modified in the flashblock. Monitor `bundle_state_clone_duration` and
-    /// `bundle_state_clone_size` metrics to track if this becomes a bottleneck.
-    pub fn get_bundle_state(&self) -> BundleState {
-        let size = self.bundle_state.state.len();
-        let start = Instant::now();
-        let cloned = self.bundle_state.clone();
-        Metrics::bundle_state_clone_duration().record(start.elapsed());
-        Metrics::bundle_state_clone_size().record(size as f64);
-        cloned
+    /// Returns a shared handle to the bundle state.
+    pub fn get_bundle_state(&self) -> Arc<BundleState> {
+        Arc::clone(&self.bundle_state)
+    }
+
+    /// Records pending-block metrics.
+    pub fn record_metrics(&self) {
+        Metrics::pending_blocks_total_transactions().set(self.transactions.len() as f64);
+        Metrics::pending_blocks_bundle_state_accounts()
+            .set(self.bundle_state.state.len() as f64);
+        Metrics::pending_blocks_bundle_state_size()
+            .set(self.bundle_state.state_size as f64);
+        Metrics::pending_blocks_flashblocks_count().set(self.flashblocks.len() as f64);
     }
 
     /// Returns all transactions for a specific block number.
@@ -1263,5 +1266,30 @@ mod tests {
 
         assert_eq!(txs.len(), 1);
         assert_eq!(txs[0].transaction.tx_hash(), hash_a);
+    }
+
+    #[test]
+    fn bundle_state_is_arc_shared_across_accesses() {
+        let mut builder = PendingBlocksBuilder::new();
+        builder.with_flashblocks([test_flashblock()]);
+        builder.with_header(Sealed::new_unchecked(Header::default(), B256::ZERO));
+        builder.with_bundle_state(BundleState::default());
+
+        let pending = builder.build().expect("should build pending blocks");
+
+        let bundle_state_1 = pending.get_bundle_state();
+        let bundle_state_2 = pending.get_bundle_state();
+
+        assert!(
+            Arc::ptr_eq(&bundle_state_1, &bundle_state_2),
+            "get_bundle_state must return clones of the same Arc allocation, \
+             not deep clones of BundleState (CHAIN-4034 Fix 2)"
+        );
+
+        assert_eq!(
+            Arc::strong_count(&bundle_state_1),
+            3,
+            "expected exactly 3 references: PendingBlocks + bundle_state_1 + bundle_state_2"
+        );
     }
 }

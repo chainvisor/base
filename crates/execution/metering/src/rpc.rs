@@ -223,7 +223,7 @@ where
         // value from the flashblock base payload when available, otherwise fall back to the header.
         let parent_beacon_block_root = header.parent_beacon_block_root().or_else(|| {
             pending_blocks.as_ref().and_then(|pb| {
-                pb.get_flashblocks()
+                pb.flashblocks()
                     .first()
                     .and_then(|fb| fb.base.as_ref().map(|base| base.parent_beacon_block_root))
             })
