@@ -15,7 +15,7 @@ pub use task_queue::{
     DelegatedForkchoiceTask, DelegatedForkchoiceTaskError, DelegatedForkchoiceUpdate, Engine,
     EngineBuildError, EngineResetError, EngineTask, EngineTaskError, EngineTaskErrorSeverity,
     EngineTaskErrors, EngineTaskExt, FinalizeTask, FinalizeTaskError, InsertPayloadSafety,
-    InsertTask, InsertTaskError, InsertTaskResult, SealTask, SealTaskError, SynchronizeTask,
+    InsertTaskError, InsertTaskResult, SealTask, SealTaskError, SynchronizeTask,
     SynchronizeTaskError,
 };
 
