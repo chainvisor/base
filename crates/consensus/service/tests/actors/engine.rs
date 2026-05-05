@@ -137,8 +137,7 @@ async fn follow_restart_delegated_forkchoice_does_not_finalize_past_actual_safe_
     };
 
     let (state_tx, state_rx) = watch::channel(initial_state);
-    let (queue_tx, _) = watch::channel(0usize);
-    let engine = Engine::new(initial_state, state_tx, queue_tx);
+    let engine = Engine::new(initial_state, state_tx);
 
     let processor = EngineProcessor::new(
         Arc::clone(&client),

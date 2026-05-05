@@ -84,8 +84,7 @@ impl FollowNode {
     {
         let engine_state = EngineState::default();
         let (engine_state_tx, engine_state_rx) = watch::channel(engine_state);
-        let (engine_queue_length_tx, engine_queue_length_rx) = watch::channel(0);
-        let engine = Engine::new(engine_state, engine_state_tx, engine_queue_length_tx);
+        let engine = Engine::new(engine_state, engine_state_tx);
 
         let engine_processor = EngineProcessor::new(
             Arc::clone(&engine_client),
@@ -104,7 +103,6 @@ impl FollowNode {
             Arc::clone(&engine_client),
             Arc::clone(&self.config),
             engine_state_rx,
-            engine_queue_length_rx,
         );
 
         let engine_actor =
