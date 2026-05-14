@@ -176,7 +176,7 @@ impl StorageCtx {
 
     /// Returns a success [`PrecompileOutput`] with the current gas used.
     pub fn success_output(&self, output: Bytes) -> PrecompileOutput {
-        PrecompileOutput::new(self.gas_used(), output)
+        PrecompileOutput::new(self.gas_used(), output, 0)
     }
 
     /// Returns an ABI-encoded success output.
@@ -186,7 +186,7 @@ impl StorageCtx {
 
     /// Returns a revert [`PrecompileOutput`] with the current gas used.
     pub fn revert_output(&self, output: Bytes) -> PrecompileOutput {
-        PrecompileOutput::new_reverted(self.gas_used(), output)
+        PrecompileOutput::revert(self.gas_used(), output, 0)
     }
 
     /// Reverts with an ABI-encoded error.
