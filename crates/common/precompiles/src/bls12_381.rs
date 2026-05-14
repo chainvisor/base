@@ -9,24 +9,24 @@ use revm::precompile::{
 /// Max input size for the BLS12-381 G1 MSM precompile after the Isthmus hardfork.
 pub(crate) const ISTHMUS_G1_MSM_MAX_INPUT_SIZE: usize = 513760;
 /// Max input size for the BLS12-381 G1 MSM precompile after the Jovian hardfork.
-pub(crate) const JOVIAN_G1_MSM_MAX_INPUT_SIZE: usize = 288_960;
+pub const JOVIAN_G1_MSM_MAX_INPUT_SIZE: usize = 288_960;
 
 /// Max input size for the BLS12-381 G2 MSM precompile after the Isthmus hardfork.
 pub(crate) const ISTHMUS_G2_MSM_MAX_INPUT_SIZE: usize = 488448;
 /// Max input size for the BLS12-381 G2 MSM precompile after the Jovian hardfork.
-pub(crate) const JOVIAN_G2_MSM_MAX_INPUT_SIZE: usize = 278_784;
+pub const JOVIAN_G2_MSM_MAX_INPUT_SIZE: usize = 278_784;
 
 /// Max input size for the BLS12-381 pairing precompile after the Isthmus hardfork.
 pub(crate) const ISTHMUS_PAIRING_MAX_INPUT_SIZE: usize = 235008;
 /// Max input size for the BLS12-381 pairing precompile after the Jovian hardfork.
-pub(crate) const JOVIAN_PAIRING_MAX_INPUT_SIZE: usize = 156_672;
+pub const JOVIAN_PAIRING_MAX_INPUT_SIZE: usize = 156_672;
 
 /// BLS12-381 G1 MSM precompile with Isthmus input limits.
-pub const ISTHMUS_G1_MSM: Precompile =
+pub(crate) const ISTHMUS_G1_MSM: Precompile =
     Precompile::new(PrecompileId::Bls12G1Msm, G1_MSM_ADDRESS, run_isthmus_g1_msm);
 
 /// Run the BLS12-381 G1 MSM precompile with Isthmus input limit.
-pub fn run_isthmus_g1_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+pub(crate) fn run_isthmus_g1_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     if input.len() > ISTHMUS_G1_MSM_MAX_INPUT_SIZE {
         return Err(PrecompileError::Fatal(
             "G1MSM input length too long for Base input size limitation after the Isthmus Hardfork"
@@ -37,11 +37,11 @@ pub fn run_isthmus_g1_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> Preco
 }
 
 /// BLS12-381 G2 MSM precompile with Isthmus input limits.
-pub const ISTHMUS_G2_MSM: Precompile =
+pub(crate) const ISTHMUS_G2_MSM: Precompile =
     Precompile::new(PrecompileId::Bls12G2Msm, G2_MSM_ADDRESS, run_isthmus_g2_msm);
 
 /// Run the BLS12-381 G2 MSM precompile with Isthmus input limit.
-pub fn run_isthmus_g2_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+pub(crate) fn run_isthmus_g2_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     if input.len() > ISTHMUS_G2_MSM_MAX_INPUT_SIZE {
         return Err(PrecompileError::Fatal(
             "G2MSM input length too long for Base input size limitation".to_string(),
@@ -51,11 +51,15 @@ pub fn run_isthmus_g2_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> Preco
 }
 
 /// BLS12-381 pairing precompile with Isthmus input limits.
-pub const ISTHMUS_PAIRING: Precompile =
+pub(crate) const ISTHMUS_PAIRING: Precompile =
     Precompile::new(PrecompileId::Bls12Pairing, PAIRING_ADDRESS, run_isthmus_pairing);
 
 /// Run the BLS12-381 pairing precompile with Isthmus input limit.
-pub fn run_isthmus_pairing(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+pub(crate) fn run_isthmus_pairing(
+    input: &[u8],
+    gas_limit: u64,
+    reservoir: u64,
+) -> PrecompileResult {
     if input.len() > ISTHMUS_PAIRING_MAX_INPUT_SIZE {
         return Err(PrecompileError::Fatal(
             "Pairing input length too long for Base input size limitation".to_string(),
@@ -69,7 +73,7 @@ pub const JOVIAN_G1_MSM: Precompile =
     Precompile::new(PrecompileId::Bls12G1Msm, G1_MSM_ADDRESS, run_jovian_g1_msm);
 
 /// Run the BLS12-381 G1 MSM precompile with Jovian input limit.
-pub fn run_jovian_g1_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+pub(crate) fn run_jovian_g1_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     if input.len() > JOVIAN_G1_MSM_MAX_INPUT_SIZE {
         return Err(PrecompileError::Fatal(
             "G1MSM input length too long for Base input size limitation after the Jovian Hardfork"
@@ -84,7 +88,7 @@ pub const JOVIAN_G2_MSM: Precompile =
     Precompile::new(PrecompileId::Bls12G2Msm, G2_MSM_ADDRESS, run_jovian_g2_msm);
 
 /// Run the BLS12-381 G2 MSM precompile with Jovian input limit.
-pub fn run_jovian_g2_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+pub(crate) fn run_jovian_g2_msm(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     if input.len() > JOVIAN_G2_MSM_MAX_INPUT_SIZE {
         return Err(PrecompileError::Fatal(
             "G2MSM input length too long for Base input size limitation after the Jovian Hardfork"
@@ -99,7 +103,7 @@ pub const JOVIAN_PAIRING: Precompile =
     Precompile::new(PrecompileId::Bls12Pairing, PAIRING_ADDRESS, run_jovian_pairing);
 
 /// Run the BLS12-381 pairing precompile with Jovian input limit.
-pub fn run_jovian_pairing(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
+pub(crate) fn run_jovian_pairing(input: &[u8], gas_limit: u64, reservoir: u64) -> PrecompileResult {
     if input.len() > JOVIAN_PAIRING_MAX_INPUT_SIZE {
         return Err(PrecompileError::Fatal(
             "Pairing input length too long for Base input size limitation after the Jovian Hardfork"
