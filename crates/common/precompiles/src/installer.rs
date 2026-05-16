@@ -2,9 +2,7 @@ use alloy_evm::precompiles::{DynPrecompile, PrecompilesMap};
 use alloy_primitives::Address;
 use base_common_chains::BaseUpgrade;
 
-use crate::{
-    ACTIVATION_REGISTRY_ADDRESS, ActivationRegistry, BasePrecompileSpec, BasePrecompiles,
-};
+use crate::{ACTIVATION_REGISTRY_ADDRESS, ActivationRegistry, BasePrecompileSpec, BasePrecompiles};
 
 /// Installs the full Base precompile set for a given spec.
 #[derive(Debug, Clone, Copy)]
