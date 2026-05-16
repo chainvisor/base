@@ -83,7 +83,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn activation_registry_is_not_installed_before_beryl() {
         let precompiles = BasePrecompileInstaller::new(BaseUpgrade::Azul).install();
 
@@ -91,7 +90,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn activation_registry_is_installed_at_beryl() {
         let precompiles = BasePrecompileInstaller::new(BaseUpgrade::Beryl).install();
 
