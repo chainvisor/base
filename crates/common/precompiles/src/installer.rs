@@ -2,7 +2,9 @@ use alloy_evm::precompiles::{DynPrecompile, PrecompilesMap};
 use alloy_primitives::Address;
 use base_common_chains::BaseUpgrade;
 
-use crate::{BasePrecompileSpec, BasePrecompiles};
+use crate::{
+    ACTIVATION_REGISTRY_ADDRESS, ActivationRegistry, BasePrecompileSpec, BasePrecompiles,
+};
 
 /// Installs the full Base precompile set for a given spec.
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +36,10 @@ impl<S: BasePrecompileSpec> BasePrecompileInstaller<S> {
     pub fn install_into(self, precompiles: &mut PrecompilesMap) {
         if self.spec.upgrade() >= BaseUpgrade::Beryl {
             precompiles.set_precompile_lookup(b20_lookup);
+            precompiles.extend_precompiles([(
+                ACTIVATION_REGISTRY_ADDRESS,
+                ActivationRegistry::create_precompile(),
+            )]);
         }
     }
 }
@@ -48,6 +54,12 @@ fn b20_lookup(address: &Address) -> Option<DynPrecompile> {
         Some(crate::token::TokenFactoryEvm::precompile())
     } else {
         None
+    }
+}
+
+impl<S: BasePrecompileSpec> Default for BasePrecompileInstaller<S> {
+    fn default() -> Self {
+        Self::new(S::default_precompile_spec())
     }
 }
 
@@ -70,5 +82,21 @@ mod tests {
         let installer = BasePrecompileInstaller::new(BaseUpgrade::LATEST);
 
         assert_eq!(installer.spec(), BaseUpgrade::LATEST);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn activation_registry_is_not_installed_before_beryl() {
+        let precompiles = BasePrecompileInstaller::new(BaseUpgrade::Azul).install();
+
+        assert!(precompiles.get(&ACTIVATION_REGISTRY_ADDRESS).is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn activation_registry_is_installed_at_beryl() {
+        let precompiles = BasePrecompileInstaller::new(BaseUpgrade::Beryl).install();
+
+        assert!(precompiles.get(&ACTIVATION_REGISTRY_ADDRESS).is_some());
     }
 }
