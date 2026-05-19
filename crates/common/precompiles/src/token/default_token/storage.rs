@@ -1,15 +1,14 @@
 use alloc::string::String;
 
-use alloy_primitives::{Address, LogData, U256, address};
+use alloy_primitives::{Address, LogData, U256};
 use base_precompile_macros::contract;
-use base_precompile_storage::{BasePrecompileError, Handler, Mapping, Result, StorageCtx};
+use base_precompile_storage::{
+    BasePrecompileError, ContractStorage, Handler, Mapping, Result, StorageCtx,
+};
 
 use crate::token::common::TokenAccounting;
 
-/// Canonical precompile address for the `DefaultToken` (placeholder — replace before deployment).
-pub const DEFAULT_TOKEN_ADDRESS: Address = address!("0000000000000000000000000000000000000900");
-
-#[contract(addr = DEFAULT_TOKEN_ADDRESS)]
+#[contract]
 pub struct DefaultTokenStorage {
     pub total_supply: U256,                                   // slot 0
     pub supply_cap: U256,                                     // slot 1
@@ -35,6 +34,14 @@ impl<'a> DefaultTokenStorage<'a> {
 }
 
 impl TokenAccounting for DefaultTokenStorage<'_> {
+    fn token_address(&self) -> Address {
+        ContractStorage::address(self)
+    }
+
+    fn is_initialized(&self) -> Result<bool> {
+        ContractStorage::is_initialized(self)
+    }
+
     fn balance_of(&self, account: Address) -> Result<U256> {
         self.balances.at(&account).read()
     }

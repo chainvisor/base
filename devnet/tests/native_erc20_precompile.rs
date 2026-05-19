@@ -2,12 +2,13 @@
 
 use std::time::Duration;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_provider::{Provider, RootProvider};
 use alloy_signer_local::PrivateKeySigner;
 use base_common_network::Base;
 use devnet::{
-    Devnet, DevnetBuilder, NativeErc20Precompile,
+    Devnet, DevnetBuilder, NativeErc20CreateDefaultTokenParams, NativeErc20Factory,
+    NativeErc20Precompile,
     config::{ANVIL_ACCOUNT_5, ANVIL_ACCOUNT_6},
 };
 use eyre::{Result, WrapErr, ensure};
@@ -32,13 +33,30 @@ async fn test_native_erc20_precompile_transfer_via_rpc() -> Result<()> {
     let recipient = ANVIL_ACCOUNT_6.address;
 
     devnet.wait_for_balance(admin.address()).await?;
-    devnet.wait_for_native_erc20_code(&admin).await?;
 
-    let native_erc20 = NativeErc20Precompile::new(devnet.provider(), &admin, L2_CHAIN_ID)
+    let factory = NativeErc20Factory::new(devnet.provider(), &admin, L2_CHAIN_ID)
         .with_receipt_timeout(TX_RECEIPT_TIMEOUT);
-    let issuer_role = native_erc20.issuer_role().await?;
+    let token_address = factory
+        .create_default(NativeErc20CreateDefaultTokenParams {
+            name: "Devnet Token".to_string(),
+            symbol: "DVT".to_string(),
+            decimals: 18,
+            admin: admin.address(),
+            capabilities: U256::ZERO,
+            initialSupply: U256::ZERO,
+            initialSupplyRecipient: admin.address(),
+            transferPolicyId: 1,
+            supplyCap: U256::MAX,
+            minimumRedeemable: U256::ZERO,
+            contractURI: "ipfs://devnet-token".to_string(),
+            salt: B256::repeat_byte(0x20),
+        })
+        .await?;
 
-    native_erc20.grant_role(issuer_role, admin.address()).await?;
+    let native_erc20 =
+        NativeErc20Precompile::new(devnet.provider(), &admin, L2_CHAIN_ID, token_address)
+            .with_receipt_timeout(TX_RECEIPT_TIMEOUT);
+    native_erc20.wait_for_code(TX_RECEIPT_TIMEOUT, BLOCK_POLL_INTERVAL).await?;
     native_erc20.mint(admin.address(), U256::from(MINT_AMOUNT)).await?;
 
     let admin_balance_before = native_erc20.balance_of(admin.address()).await?;
@@ -113,11 +131,5 @@ impl NativeErc20Devnet {
         })
         .await
         .wrap_err("Timed out waiting for funded devnet account")?
-    }
-
-    async fn wait_for_native_erc20_code(&self, signer: &PrivateKeySigner) -> Result<()> {
-        NativeErc20Precompile::new(&self.provider, signer, L2_CHAIN_ID)
-            .wait_for_code(TX_RECEIPT_TIMEOUT, BLOCK_POLL_INTERVAL)
-            .await
     }
 }

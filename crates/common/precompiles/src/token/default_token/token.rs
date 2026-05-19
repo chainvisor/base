@@ -1,9 +1,7 @@
 //! `DefaultToken` struct — the concrete B-20 token type.
 
 use alloy_primitives::Address;
-use base_precompile_storage::StorageCtx;
 
-use super::storage::{DEFAULT_TOKEN_ADDRESS, DefaultTokenStorage};
 use crate::token::common::{
     Burnable, Configurable, Mintable, Pausable, Permittable, Redeemable, Token, TokenAccounting,
     Transferable,
@@ -13,17 +11,11 @@ use crate::token::common::{
 ///
 /// The generic `S` lets callers swap in an in-memory [`TokenAccounting`]
 /// implementation for unit tests without touching real EVM storage. In
-/// production, [`DefaultToken::new`] wires in [`DefaultTokenStorage`].
+/// production, the storage adapter is bound to the address selected by the
+/// dynamic precompile lookup.
 #[derive(Debug, Clone)]
 pub struct DefaultToken<S: TokenAccounting> {
     pub(super) accounting: S,
-}
-
-impl<'a> DefaultToken<DefaultTokenStorage<'a>> {
-    /// Creates a new `DefaultToken` backed by [`DefaultTokenStorage`].
-    pub fn new(storage: StorageCtx<'a>) -> Self {
-        Self { accounting: DefaultTokenStorage::new(storage) }
-    }
 }
 
 impl<S: TokenAccounting> DefaultToken<S> {
@@ -36,7 +28,7 @@ impl<S: TokenAccounting> DefaultToken<S> {
 }
 
 // ---------------------------------------------------------------------------
-// Token: wire the accounting field and fix the precompile address
+// Token: wire the accounting field and dynamic token address
 // ---------------------------------------------------------------------------
 
 impl<S: TokenAccounting> Token for DefaultToken<S> {
@@ -51,7 +43,7 @@ impl<S: TokenAccounting> Token for DefaultToken<S> {
     }
 
     fn token_address(&self) -> Address {
-        DEFAULT_TOKEN_ADDRESS
+        self.accounting.token_address()
     }
 }
 

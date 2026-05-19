@@ -6,5 +6,5 @@ mod storage;
 mod token;
 
 pub use evm::DefaultTokenEvm;
-pub use storage::{DEFAULT_TOKEN_ADDRESS, DefaultTokenStorage};
+pub use storage::DefaultTokenStorage;
 pub use token::DefaultToken;
