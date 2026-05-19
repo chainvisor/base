@@ -33,15 +33,15 @@ impl<'a> TokenFactory<'a> {
                 Ok(ITokenFactory::createDefaultCall::abi_encode_returns(&token).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::predictDefaultAddress(call)) => {
-                let (addr, _) = TokenVariant::Default.address(call.creator, call.salt);
+                let (addr, _) = TokenVariant::Default.compute_address(call.creator, call.salt);
                 Ok(ITokenFactory::predictDefaultAddressCall::abi_encode_returns(&addr).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::predictStablecoinAddress(call)) => {
-                let (addr, _) = TokenVariant::Stablecoin.address(call.creator, call.salt);
+                let (addr, _) = TokenVariant::Stablecoin.compute_address(call.creator, call.salt);
                 Ok(ITokenFactory::predictStablecoinAddressCall::abi_encode_returns(&addr).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::predictSecurityAddress(call)) => {
-                let (addr, _) = TokenVariant::Security.address(call.creator, call.salt);
+                let (addr, _) = TokenVariant::Security.compute_address(call.creator, call.salt);
                 Ok(ITokenFactory::predictSecurityAddressCall::abi_encode_returns(&addr).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::isB20(call)) => {

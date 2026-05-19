@@ -17,6 +17,5 @@ pub use default_token::{
 mod factory;
 pub use factory::{
     DEFAULT_PREFIX, FACTORY_ADDRESS, RESERVED_SIZE, SECURITY_PREFIX, STABLECOIN_PREFIX,
-    TokenFactory, TokenFactoryEvm, TokenVariant, VARIANT_DEFAULT, VARIANT_NONE, VARIANT_SECURITY,
-    VARIANT_STABLECOIN,
+    TokenFactory, TokenFactoryEvm, TokenVariant,
 };

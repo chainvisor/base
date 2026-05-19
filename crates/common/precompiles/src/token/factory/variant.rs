@@ -13,15 +13,6 @@ pub const SECURITY_PREFIX: [u8; 12] = TokenVariant::Security.prefix();
 /// Addresses whose lower-8-byte value is reserved for protocol bootstrap tokens.
 pub const RESERVED_SIZE: u64 = 1024;
 
-/// Variant discriminant returned by `variantOf` when address has no B-20 prefix.
-pub const VARIANT_NONE: u8 = 0;
-/// Variant discriminant for Default-variant tokens.
-pub const VARIANT_DEFAULT: u8 = TokenVariant::Default as u8;
-/// Variant discriminant for Stablecoin-variant tokens.
-pub const VARIANT_STABLECOIN: u8 = TokenVariant::Stablecoin as u8;
-/// Variant discriminant for Security-variant tokens.
-pub const VARIANT_SECURITY: u8 = TokenVariant::Security as u8;
-
 /// B-20 token variant encoded in the token address prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -53,7 +44,7 @@ impl TokenVariant {
     ///
     /// Returns the address and the lower 8 bytes of the hash as a `u64` for the reserved-range
     /// check.
-    pub fn address(self, creator: Address, salt: B256) -> (Address, u64) {
+    pub fn compute_address(self, creator: Address, salt: B256) -> (Address, u64) {
         let hash = keccak256((creator, salt).abi_encode());
 
         let mut lower_bytes_buf = [0u8; 8];
@@ -83,8 +74,8 @@ impl TokenVariant {
         }
     }
 
-    /// Returns `true` when `address` has any valid B-20 token variant prefix.
-    pub fn is_valid(address: Address) -> bool {
+    /// Returns `true` when `address` has any B-20 token variant prefix.
+    pub fn is_b20_address(address: Address) -> bool {
         Self::from_address(address).is_some()
     }
 }
