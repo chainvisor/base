@@ -1,100 +1,15 @@
-use alloy_primitives::{Address, B256, Bytes, U256, address, keccak256};
-use alloy_sol_types::SolValue;
+use alloy_primitives::{Address, Bytes, U256, address};
 use base_precompile_macros::contract;
 use base_precompile_storage::{BasePrecompileError, Handler, Result};
 use revm::state::Bytecode;
 
+use super::variant::{RESERVED_SIZE, TokenVariant, VARIANT_NONE};
 use crate::token::{DefaultTokenStorage, TokenAccounting, abi::ITokenFactory};
 
 // ── Addresses ────────────────────────────────────────────────────────────────
 
 /// Singleton precompile address for the `TokenFactory`.
 pub const FACTORY_ADDRESS: Address = address!("b02f000000000000000000000000000000000000");
-
-// ── Address prefixes (12 bytes each) ─────────────────────────────────────────
-
-/// Address prefix for Default-variant tokens.
-pub const DEFAULT_PREFIX: [u8; 12] = [0xb0, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-/// Address prefix for Stablecoin-variant tokens.
-pub const STABLECOIN_PREFIX: [u8; 12] = [0xb0, 0x21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-/// Address prefix for Security-variant tokens.
-pub const SECURITY_PREFIX: [u8; 12] = [0xb0, 0x22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-
-// ── Reserved range ───────────────────────────────────────────────────────────
-
-/// Addresses whose lower-8-byte value (as `u64`) is less than this are reserved for
-/// protocol-level bootstrap tokens and cannot be created by public `create*` calls.
-pub const RESERVED_SIZE: u64 = 1024;
-
-// ── Variant discriminants ─────────────────────────────────────────────────────
-
-/// Variant discriminant returned by `variantOf` when address has no B-20 prefix.
-pub const VARIANT_NONE: u8 = 0;
-/// Variant discriminant for Default-variant tokens.
-pub const VARIANT_DEFAULT: u8 = 1;
-/// Variant discriminant for Stablecoin-variant tokens.
-pub const VARIANT_STABLECOIN: u8 = 2;
-/// Variant discriminant for Security-variant tokens.
-pub const VARIANT_SECURITY: u8 = 3;
-
-// ── Address utilities ─────────────────────────────────────────────────────────
-
-/// Returns `true` if `addr` has the address prefix of any B-20 token variant.
-///
-/// This is a pure prefix check. The caller is responsible for also verifying that code
-/// is deployed at the address (which is the full `isB20` check).
-pub fn has_b20_prefix(addr: &Address) -> bool {
-    let b = addr.as_slice();
-    b[0] == 0xb0 && matches!(b[1], 0x20..=0x22) && b[2..12] == [0u8; 10]
-}
-
-/// Returns the variant discriminant for `addr` based on its address prefix.
-/// Returns `VARIANT_NONE` if the address does not match any B-20 prefix.
-pub fn variant_of(addr: &Address) -> u8 {
-    let b = addr.as_slice();
-    if b[0] != 0xb0 || b[2..12] != [0u8; 10] {
-        return VARIANT_NONE;
-    }
-    match b[1] {
-        0x20 => VARIANT_DEFAULT,
-        0x21 => VARIANT_STABLECOIN,
-        0x22 => VARIANT_SECURITY,
-        _ => VARIANT_NONE,
-    }
-}
-
-/// Computes the deterministic token address from a 12-byte prefix, `creator`, and `salt`.
-///
-/// Returns the address and the lower 8 bytes of the hash (as `u64`) used for the reserved-range
-/// check.
-fn compute_address(prefix: [u8; 12], creator: Address, salt: B256) -> (Address, u64) {
-    let hash = keccak256((creator, salt).abi_encode());
-
-    let mut lower_bytes_buf = [0u8; 8];
-    lower_bytes_buf.copy_from_slice(&hash[..8]);
-    let lower_bytes = u64::from_be_bytes(lower_bytes_buf);
-
-    let mut addr_bytes = [0u8; 20];
-    addr_bytes[..12].copy_from_slice(&prefix);
-    addr_bytes[12..].copy_from_slice(&hash[..8]);
-
-    (Address::from(addr_bytes), lower_bytes)
-}
-
-/// Computes the deterministic address for a Default-variant token.
-pub fn compute_default_address(creator: Address, salt: B256) -> (Address, u64) {
-    compute_address(DEFAULT_PREFIX, creator, salt)
-}
-
-/// Computes the deterministic address for a Stablecoin-variant token.
-pub fn compute_stablecoin_address(creator: Address, salt: B256) -> (Address, u64) {
-    compute_address(STABLECOIN_PREFIX, creator, salt)
-}
-
-/// Computes the deterministic address for a Security-variant token.
-pub fn compute_security_address(creator: Address, salt: B256) -> (Address, u64) {
-    compute_address(SECURITY_PREFIX, creator, salt)
-}
 
 // ── Factory struct ────────────────────────────────────────────────────────────
 
@@ -125,7 +40,7 @@ impl<'a> TokenFactory<'a> {
             return Err(BasePrecompileError::revert(ITokenFactory::InvalidSupplyCap {}));
         }
 
-        let (token_address, lower_bytes) = compute_default_address(caller, p.salt);
+        let (token_address, lower_bytes) = TokenVariant::Default.address(caller, p.salt);
 
         // Reserved-range guard.
         if lower_bytes < RESERVED_SIZE {
@@ -183,7 +98,7 @@ impl<'a> TokenFactory<'a> {
 
     /// Returns whether `token` is a deployed B-20 token (prefix match + non-empty code).
     pub fn is_b20(&self, token: Address) -> Result<bool> {
-        if !has_b20_prefix(&token) {
+        if !TokenVariant::is_valid(token) {
             return Ok(false);
         }
         self.storage.with_account_info(token, |info| Ok(!info.is_empty_code_hash()))
@@ -191,12 +106,13 @@ impl<'a> TokenFactory<'a> {
 
     /// Returns the variant discriminant for `token` decoded from its address prefix.
     pub fn variant_of_token(&self, token: Address) -> Result<u8> {
-        Ok(variant_of(&token))
+        Ok(TokenVariant::from_address(token).map_or(VARIANT_NONE, TokenVariant::discriminant))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::B256;
     use base_precompile_storage::{HashMapStorageProvider, StorageCtx};
 
     use super::*;
@@ -231,22 +147,22 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_default_address_is_deterministic() {
+    fn test_default_variant_address_is_deterministic() {
         let creator = Address::repeat_byte(0x11);
         let salt = B256::repeat_byte(0x22);
-        let (a1, l1) = compute_default_address(creator, salt);
-        let (a2, l2) = compute_default_address(creator, salt);
+        let (a1, l1) = TokenVariant::Default.address(creator, salt);
+        let (a2, l2) = TokenVariant::Default.address(creator, salt);
         assert_eq!(a1, a2);
         assert_eq!(l1, l2);
-        assert!(has_b20_prefix(&a1));
-        assert_eq!(variant_of(&a1), VARIANT_DEFAULT);
+        assert!(TokenVariant::is_valid(a1));
+        assert_eq!(TokenVariant::from_address(a1), Some(TokenVariant::Default));
     }
 
     #[test]
     fn test_different_salts_produce_different_addresses() {
         let creator = Address::repeat_byte(0x11);
-        let (a1, _) = compute_default_address(creator, B256::repeat_byte(0x01));
-        let (a2, _) = compute_default_address(creator, B256::repeat_byte(0x02));
+        let (a1, _) = TokenVariant::Default.address(creator, B256::repeat_byte(0x01));
+        let (a2, _) = TokenVariant::Default.address(creator, B256::repeat_byte(0x02));
         assert_ne!(a1, a2);
     }
 
@@ -254,15 +170,15 @@ mod tests {
     fn test_variants_produce_different_addresses_for_same_input() {
         let creator = Address::repeat_byte(0x11);
         let salt = B256::repeat_byte(0x33);
-        let (def, _) = compute_default_address(creator, salt);
-        let (sc, _) = compute_stablecoin_address(creator, salt);
-        let (sec, _) = compute_security_address(creator, salt);
+        let (def, _) = TokenVariant::Default.address(creator, salt);
+        let (sc, _) = TokenVariant::Stablecoin.address(creator, salt);
+        let (sec, _) = TokenVariant::Security.address(creator, salt);
         assert_ne!(def, sc);
         assert_ne!(def, sec);
         assert_ne!(sc, sec);
-        assert_eq!(variant_of(&def), VARIANT_DEFAULT);
-        assert_eq!(variant_of(&sc), VARIANT_STABLECOIN);
-        assert_eq!(variant_of(&sec), VARIANT_SECURITY);
+        assert_eq!(TokenVariant::from_address(def), Some(TokenVariant::Default));
+        assert_eq!(TokenVariant::from_address(sc), Some(TokenVariant::Stablecoin));
+        assert_eq!(TokenVariant::from_address(sec), Some(TokenVariant::Security));
     }
 
     #[test]
@@ -271,7 +187,7 @@ mod tests {
         let caller = Address::repeat_byte(0x55);
         let salt = B256::repeat_byte(0xAA);
         let call = default_call(salt);
-        let (expected_addr, _) = compute_default_address(caller, salt);
+        let (expected_addr, _) = TokenVariant::Default.address(caller, salt);
 
         StorageCtx::enter(&mut storage, |ctx| {
             let mut factory = TokenFactory::new(ctx);
@@ -286,7 +202,7 @@ mod tests {
         let caller = Address::repeat_byte(0x55);
         let salt = B256::repeat_byte(0xBB);
         let call = make_params("My Token", "MYT", salt, U256::ZERO, U256::MAX);
-        let (expected_addr, _) = compute_default_address(caller, salt);
+        let (expected_addr, _) = TokenVariant::Default.address(caller, salt);
 
         StorageCtx::enter(&mut storage, |ctx| {
             let mut factory = TokenFactory::new(ctx);
@@ -307,7 +223,7 @@ mod tests {
         let recipient = Address::repeat_byte(0xCD);
         let supply = U256::from(5_000u64);
         let call = make_params("Supply Token", "SUP", salt, supply, U256::MAX);
-        let (expected_addr, _) = compute_default_address(caller, salt);
+        let (expected_addr, _) = TokenVariant::Default.address(caller, salt);
 
         StorageCtx::enter(&mut storage, |ctx| {
             let mut factory = TokenFactory::new(ctx);
@@ -379,7 +295,7 @@ mod tests {
     fn test_is_b20_false_before_create() {
         let mut storage = HashMapStorageProvider::new(1);
         let creator = Address::repeat_byte(0x55);
-        let (addr, _) = compute_default_address(creator, B256::repeat_byte(0xFF));
+        let (addr, _) = TokenVariant::Default.address(creator, B256::repeat_byte(0xFF));
 
         StorageCtx::enter(&mut storage, |ctx| {
             let factory = TokenFactory::new(ctx);
@@ -409,7 +325,10 @@ mod tests {
         StorageCtx::enter(&mut storage, |ctx| {
             let mut factory = TokenFactory::new(ctx);
             let token = factory.create_default(caller, default_call(salt)).unwrap();
-            assert_eq!(factory.variant_of_token(token).unwrap(), VARIANT_DEFAULT);
+            assert_eq!(
+                factory.variant_of_token(token).unwrap(),
+                TokenVariant::Default.discriminant()
+            );
         });
     }
 
@@ -436,6 +355,7 @@ mod tests {
 
 #[cfg(test)]
 mod integration {
+    use alloy_primitives::B256;
     use base_precompile_storage::{HashMapStorageProvider, StorageCtx};
 
     use super::*;
@@ -626,7 +546,10 @@ mod integration {
 
             // ── verify factory state ──────────────────────────────────────────
             assert!(factory.is_b20(token_addr).unwrap(), "should be B-20");
-            assert_eq!(factory.variant_of_token(token_addr).unwrap(), VARIANT_DEFAULT);
+            assert_eq!(
+                factory.variant_of_token(token_addr).unwrap(),
+                TokenVariant::Default.discriminant()
+            );
 
             // ── verify 0xEF stub at token address ────────────────────────────
             assert!(ctx.has_bytecode(token_addr).unwrap(), "0xEF stub should be present");

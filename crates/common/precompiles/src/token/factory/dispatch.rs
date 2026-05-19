@@ -5,9 +5,7 @@ use alloy_sol_types::{SolCall, SolInterface};
 use base_precompile_storage::{BasePrecompileError, IntoPrecompileResult, StorageCtx};
 use revm::precompile::PrecompileResult;
 
-use super::storage::{
-    TokenFactory, compute_default_address, compute_security_address, compute_stablecoin_address,
-};
+use super::{storage::TokenFactory, variant::TokenVariant};
 use crate::token::abi::ITokenFactory;
 
 impl<'a> TokenFactory<'a> {
@@ -35,15 +33,15 @@ impl<'a> TokenFactory<'a> {
                 Ok(ITokenFactory::createDefaultCall::abi_encode_returns(&token).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::predictDefaultAddress(call)) => {
-                let (addr, _) = compute_default_address(call.creator, call.salt);
+                let (addr, _) = TokenVariant::Default.address(call.creator, call.salt);
                 Ok(ITokenFactory::predictDefaultAddressCall::abi_encode_returns(&addr).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::predictStablecoinAddress(call)) => {
-                let (addr, _) = compute_stablecoin_address(call.creator, call.salt);
+                let (addr, _) = TokenVariant::Stablecoin.address(call.creator, call.salt);
                 Ok(ITokenFactory::predictStablecoinAddressCall::abi_encode_returns(&addr).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::predictSecurityAddress(call)) => {
-                let (addr, _) = compute_security_address(call.creator, call.salt);
+                let (addr, _) = TokenVariant::Security.address(call.creator, call.salt);
                 Ok(ITokenFactory::predictSecurityAddressCall::abi_encode_returns(&addr).into())
             }
             Ok(ITokenFactory::ITokenFactoryCalls::isB20(call)) => {

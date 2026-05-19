@@ -6,9 +6,10 @@ mod evm;
 pub use evm::TokenFactoryEvm;
 
 mod storage;
-pub use storage::{
-    DEFAULT_PREFIX, FACTORY_ADDRESS, RESERVED_SIZE, SECURITY_PREFIX, STABLECOIN_PREFIX,
-    TokenFactory, VARIANT_DEFAULT, VARIANT_NONE, VARIANT_SECURITY, VARIANT_STABLECOIN,
-    compute_default_address, compute_security_address, compute_stablecoin_address, has_b20_prefix,
-    variant_of,
+pub use storage::{FACTORY_ADDRESS, TokenFactory};
+
+mod variant;
+pub use variant::{
+    DEFAULT_PREFIX, RESERVED_SIZE, SECURITY_PREFIX, STABLECOIN_PREFIX, TokenVariant,
+    VARIANT_DEFAULT, VARIANT_NONE, VARIANT_SECURITY, VARIANT_STABLECOIN,
 };
