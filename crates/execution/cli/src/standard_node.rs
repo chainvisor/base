@@ -396,6 +396,14 @@ impl StandardBaseRethNode {
         };
         runner.install_ext::<FlashblocksExtension>(flashblocks_config);
         runner.install_ext::<Eip8130RpcExtension>(eip8130_rpc_mode);
+        // chainvisor cv-delta ExEx: inert unless the operator sets
+        // CV_EXEX_DELTA_SPOOL, so this build behaves exactly like an
+        // unpatched one until opted in (see crates/execution/cv-delta).
+        if let Ok(dir) = std::env::var("CV_EXEX_DELTA_SPOOL") {
+            if !dir.is_empty() {
+                runner.install_ext::<base_cv_delta::CvDeltaExtension>(dir.into());
+            }
+        }
         Ok(runner)
     }
 

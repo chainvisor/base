@@ -172,6 +172,7 @@ base-common-flz = { path = "crates/common/flz", default-features = false }
 base-precompile-macros = { path = "crates/common/precompile-macros" }
 base-common-genesis = { path = "crates/common/genesis", default-features = false }
 base-common-consensus = { path = "crates/common/consensus", default-features = false }
+base-cv-delta = { path = "crates/execution/cv-delta" }
 base-precompile-storage = { path = "crates/common/precompile-storage", default-features = false }
 base-common-precompiles = { path = "crates/common/precompiles", default-features = false }
 base-common-rpc-types-engine = { path = "crates/common/rpc-types-engine", default-features = false }
