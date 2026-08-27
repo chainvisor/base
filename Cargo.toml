@@ -170,6 +170,7 @@ base-common-l1-fees = { path = "crates/common/l1-fees", default-features = false
 base-common-genesis = { path = "crates/common/genesis", default-features = false }
 base-common-eip8130 = { path = "crates/common/eip8130", default-features = false }
 base-common-consensus = { path = "crates/common/consensus", default-features = false }
+base-cv-delta = { path = "crates/execution/cv-delta" }
 base-common-precompiles = { path = "crates/common/precompiles", default-features = false }
 base-precompile-storage = { path = "crates/common/precompile-storage", default-features = false }
 base-common-rpc-types-engine = { path = "crates/common/rpc-types-engine", default-features = false }
