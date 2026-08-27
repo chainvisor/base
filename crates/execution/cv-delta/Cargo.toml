@@ -1,0 +1,27 @@
+[package]
+name = "base-cv-delta"
+description = "chainvisor semantic delta emitter ExEx (CVSD v1 segments into a spool directory)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+# workspace
+futures = { workspace = true }
+tracing = { workspace = true }
+eyre = { workspace = true }
+serde_json = { workspace = true }
+alloy-rlp = { workspace = true }
+alloy-primitives = { workspace = true }
+revm-primitives = { workspace = true }
+reth-execution-types = { workspace = true }
+reth-exex = { workspace = true }
+reth-node-api = { workspace = true }
+base-common-consensus = { workspace = true }
+base-node-runner = { workspace = true }
+
+[lints]
+workspace = true
