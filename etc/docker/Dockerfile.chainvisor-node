@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+# Base node for the chainvisor writer host: execution, consensus, basectl and
+# cvsd-export from this fork, one image for both compose services.
+ARG RUST_VERSION=1.96.0
+
+FROM public.ecr.aws/docker/library/rust:${RUST_VERSION}-trixie AS builder
+WORKDIR /app
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      git libclang-dev libssl-dev pkg-config curl build-essential cmake lld \
+      protobuf-compiler libprotobuf-dev && \
+    rm -rf /var/lib/apt/lists/*
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+ENV CARGO_INCREMENTAL=0
+COPY . .
+RUN --mount=type=cache,id=chainvisor-node-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=chainvisor-node-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=chainvisor-node-target,target=/app/target,sharing=locked \
+    cargo build --locked --profile maxperf \
+      --bin base-reth-node --bin base-consensus --bin basectl --bin cvsd-export && \
+    mkdir -p /out && \
+    cp target/maxperf/base-reth-node target/maxperf/base-consensus \
+       target/maxperf/basectl target/maxperf/cvsd-export /out/
+
+FROM ubuntu:24.04
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates supervisor && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/log/supervisor
+WORKDIR /app
+COPY --from=builder /out/ ./
+COPY etc/scripts/node/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY etc/scripts/node/execution-entrypoint etc/scripts/node/consensus-entrypoint ./
+RUN ./base-reth-node --version && ./base-consensus --version
+CMD ["/usr/bin/supervisord"]
