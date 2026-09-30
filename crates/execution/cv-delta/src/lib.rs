@@ -51,7 +51,8 @@ use base_common_consensus::BasePrimitives;
 use reth_execution_types::{Chain, ExecutionOutcome};
 use reth_exex::{ExExContext, ExExEvent};
 use reth_node_api::{FullNodeComponents, NodeTypes};
-use revm_primitives::{Address, Bytes, B256, KECCAK_EMPTY, U256};
+use alloy_consensus::constants::KECCAK_EMPTY;
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use serde_json::{json, Value};
 use tracing::{error, info, warn};
 
@@ -271,7 +272,7 @@ fn emit_chain(dir: &Path, chain: &Chain<BasePrimitives>) -> eyre::Result<Stats> 
         // See chainvisor docs/claims/cvsd-correctness-guarantee.md.
         let header_rlp = alloy_rlp::encode(header);
         debug_assert_eq!(
-            revm_primitives::keccak256(&header_rlp),
+            keccak256(&header_rlp),
             block.hash(),
             "header RLP must hash to the block hash"
         );
