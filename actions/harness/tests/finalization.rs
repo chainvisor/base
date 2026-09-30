@@ -393,3 +393,89 @@ async fn finalization_does_not_regress() {
         "finalized head must not regress when an older L1 block is signalled as finalized"
     );
 }
+
+/// An L1 reorg that orphans the block a batch was included in resets derivation while the L2
+/// safe head is kept. The node's `L2Finalizer` must keep the candidates whose L1 inclusion
+/// blocks survived the reorg (so finality does not freeze until new batches arrive), must never
+/// finalize an L2 block through a candidate derived from an orphaned L1 block, and must resume
+/// normal finalization for batches derived after the reset.
+#[tokio::test]
+async fn finalizer_keeps_canonical_candidates_across_l1_reorg_reset() {
+    let batcher_cfg = BatcherConfig {
+        encoder: EncoderConfig { da_type: DaType::Calldata, ..EncoderConfig::default() },
+        ..BatcherConfig::default()
+    };
+    let rollup_cfg = TestRollupConfigBuilder::base_mainnet(&batcher_cfg).build();
+    let mut h = ActionTestHarness::new(L1MinerConfig::default(), rollup_cfg);
+
+    // L2 block i is batched into L1 block i (i = 1..=4); all L2 blocks are in epoch 0.
+    let l1_chain = SharedL1Chain::from_blocks(h.l1.chain().to_vec());
+    let mut sequencer = h.create_l2_sequencer(l1_chain);
+    let blocks = sequencer.build_next_blocks_with_single_transactions(4).await;
+    let mut batcher = Batcher::new(ActionL2Source::new(), &h.rollup_config, batcher_cfg.clone());
+    for block in blocks {
+        batcher.push_block(block);
+        batcher.advance(&mut h.l1).await;
+    }
+    let (mut node, chain) = h.create_test_rollup_node_from_sequencer(
+        &mut sequencer,
+        SharedL1Chain::from_blocks(h.l1.chain().to_vec()),
+    );
+    node.initialize().await;
+    assert_eq!(node.run_until_idle().await, 4);
+    assert_eq!(node.l2_safe_number(), 4);
+    for l1 in 1..=4 {
+        assert_eq!(node.safe_head_at_l1(l1).await.unwrap().safe_head.number, l1);
+    }
+
+    // L1 reorg: blocks 3 and 4 (which included the batches for L2 blocks 3 and 4) are orphaned
+    // and replaced by empty blocks 3' and 4'.
+    let orphaned_3 = h.l1.block_info_at(3);
+    h.l1.reorg_to(2).expect("reorg to L1 block 2");
+    h.l1.mine_block();
+    h.l1.mine_block();
+    assert_ne!(h.l1.block_info_at(3).hash, orphaned_3.hash, "block 3' must be a new block");
+    chain.truncate_to(2);
+    chain.push(h.l1.block_by_number(3).unwrap().clone());
+    chain.push(h.l1.tip().clone());
+
+    // Derivation reset keeps the L2 safe head (its epoch, L1 block 0, is still canonical).
+    let safe_head = node.l2_safe();
+    node.act_reset(safe_head).await;
+    assert_eq!(node.run_until_idle().await, 0, "3' and 4' carry no batches");
+    assert_eq!(node.l2_safe_number(), 4);
+
+    // L1 block 2 finalizes: the candidate derived from it (L2 block 2) is on the canonical chain
+    // and must be finalized even though no batch was derived since the reset.
+    node.act_l1_finalized_signal(h.l1.block_info_at(2)).await;
+    assert_eq!(
+        node.l2_finalizer_finalized_number(),
+        2,
+        "the last candidate before the fork must finalize after the reset"
+    );
+
+    // L1 block 4' finalizes: L2 blocks 3 and 4 were derived from orphaned L1 blocks, so their
+    // candidates must never be finalized.
+    node.act_l1_finalized_signal(h.l1.block_info_at(4)).await;
+    assert_eq!(
+        node.l2_finalizer_finalized_number(),
+        2,
+        "no L2 block may be finalized through a candidate from an orphaned L1 block"
+    );
+
+    // Normal finalization resumes: L2 block 5 is batched into L1 block 5 and derived.
+    let block_5 = sequencer.build_next_block_with_single_transaction().await;
+    let mut batcher = Batcher::new(ActionL2Source::new(), &h.rollup_config, batcher_cfg);
+    batcher.push_block(block_5);
+    batcher.advance(&mut h.l1).await;
+    chain.push(h.l1.tip().clone());
+    assert_eq!(node.run_until_idle().await, 1);
+    assert_eq!(node.l2_safe_number(), 5);
+
+    node.act_l1_finalized_signal(h.l1.block_info_at(5)).await;
+    assert_eq!(
+        node.l2_finalizer_finalized_number(),
+        5,
+        "a candidate derived after the reset must finalize normally"
+    );
+}

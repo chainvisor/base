@@ -109,8 +109,9 @@ where
     async fn signal(&mut self, signal: Signal) {
         if let Signal::Reset(ResetSignal { l2_safe_head: _reset_safe_head }) = signal {
             Metrics::derivation_l1_origin().absolute(_reset_safe_head.l1_origin.number);
-            // Clear the finalization queue on reset.
-            self.finalizer.clear();
+            // Keep the finalization candidates the reset leaves safe; each becomes finalizable
+            // again only once the post-reset traversal passes its L1 block with the same hash.
+            self.finalizer.reset(&_reset_safe_head);
             // Discard any in-flight derived_from so that a stale pre-reset L1 inclusion
             // block is never recorded for a post-reset safe head confirmation.
             self.pending_derived_from = None;
@@ -135,6 +136,9 @@ where
 
         match self.pipeline.signal(signal).await {
             Ok(_) => {
+                if let Some(origin) = self.pipeline.origin() {
+                    self.finalizer.observe_l1_origin(origin);
+                }
                 self.publish_derivation_origin();
                 info!(target: "derivation", ?signal, "[SIGNAL] Executed Successfully");
             }
@@ -163,6 +167,7 @@ where
                     let origin =
                         self.pipeline.origin().ok_or(PipelineError::MissingOrigin.crit())?;
 
+                    self.finalizer.observe_l1_origin(origin);
                     Metrics::derivation_l1_origin().absolute(origin.number);
                     self.derivation_origin_tx.send_replace(Some(origin));
                     debug!(target: "derivation", l1_block = origin.number, "Advanced L1 origin");

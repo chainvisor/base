@@ -13,6 +13,7 @@ use base_consensus_derive::{
     StatefulAttributesBuilder, StepResult,
 };
 use base_consensus_engine::EngineForkchoiceVersion;
+use base_consensus_node::L2Finalizer;
 use base_consensus_safedb::{
     SafeDB, SafeDBError, SafeDBReader, SafeHeadListener, SafeHeadResponse,
 };
@@ -167,6 +168,13 @@ pub struct TestRollupNode<P: Pipeline + SignalReceiver + Debug + Send = Verifier
     safe_db: Arc<SafeDB>,
     /// Shared L2 chain provider backing reset walkback and batch validation.
     l2_provider: ActionL2ChainProvider,
+    /// The consensus node's [`L2Finalizer`], driven the way `DerivationActor` drives it.
+    ///
+    /// Unlike `finalized_head` (which finalizes by epoch origin), this tracks the node's real
+    /// finalization queue keyed by L1 inclusion block, including its behaviour across resets.
+    finalizer: L2Finalizer,
+    /// Highest L2 block number the [`L2Finalizer`] has released for finalization.
+    finalizer_finalized_number: u64,
 }
 
 impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
@@ -211,6 +219,8 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
             rollup_config,
             safe_db,
             l2_provider,
+            finalizer: L2Finalizer::default(),
+            finalizer_finalized_number: safe_head.block_info.number,
         }
     }
 
@@ -225,6 +235,22 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
             .signal(ActivationSignal { l2_safe_head: self.safe_head }.signal())
             .await
             .expect("TestRollupNode: initialize signal failed");
+        self.observe_pipeline_origin();
+    }
+
+    /// Report the pipeline's current L1 origin to the [`L2Finalizer`], as `DerivationActor` does
+    /// after every signal and on every [`StepResult::AdvancedOrigin`].
+    fn observe_pipeline_origin(&mut self) {
+        if let Some(origin) = self.pipeline.origin() {
+            self.finalizer.observe_l1_origin(origin);
+        }
+    }
+
+    /// Return the highest L2 block number the node's [`L2Finalizer`] has finalized.
+    ///
+    /// Updated by [`act_l1_finalized_signal`](Self::act_l1_finalized_signal).
+    pub const fn l2_finalizer_finalized_number(&self) -> u64 {
+        self.finalizer_finalized_number
     }
 
     /// Return the current L2 safe head.
@@ -345,6 +371,11 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
     /// Finds the highest L2 safe block whose L1 origin number is ≤
     /// `head.number` and promotes it to `finalized_head`.
     pub async fn act_l1_finalized_signal(&mut self, head: BlockInfo) {
+        if let Some(number) = self.finalizer.try_finalize_next(head)
+            && number > self.finalizer_finalized_number
+        {
+            self.finalizer_finalized_number = number;
+        }
         self.finalized_l1_number = head.number;
         let candidate = self
             .safe_head_history
@@ -365,10 +396,13 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
     /// clears all per-block metadata, and replaces the engine with a fresh
     /// instance that will re-execute from genesis on the new fork.
     pub async fn act_reset(&mut self, l2_safe_head: L2BlockInfo) {
+        // Same order as `DerivationActor::signal`: finalizer first, then the pipeline.
+        self.finalizer.reset(&l2_safe_head);
         self.pipeline
             .signal(ResetSignal { l2_safe_head }.signal())
             .await
             .expect("TestRollupNode: act_reset signal failed");
+        self.observe_pipeline_origin();
         self.safe_head = l2_safe_head;
         self.unsafe_head = l2_safe_head;
         self.finalized_head = l2_safe_head;
@@ -454,7 +488,10 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
                 self.execute_and_advance(attrs).await;
                 NodeStepResult::DerivationProgress
             }
-            StepResult::AdvancedOrigin => NodeStepResult::AdvancedOrigin,
+            StepResult::AdvancedOrigin => {
+                self.observe_pipeline_origin();
+                NodeStepResult::AdvancedOrigin
+            }
             StepResult::StepFailed(err) => match err {
                 PipelineErrorKind::Temporary(PipelineError::Eof) => NodeStepResult::Idle,
                 PipelineErrorKind::Temporary(
@@ -490,6 +527,9 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
     pub async fn act_l2_pipeline_step(&mut self) -> Result<StepResult, VerifierError> {
         self.drain_gossip();
         let result = self.pipeline.step(self.safe_head).await;
+        if matches!(result, StepResult::AdvancedOrigin) {
+            self.observe_pipeline_origin();
+        }
         if matches!(result, StepResult::PreparedAttributes)
             && let Some(attrs) = self.pipeline.next()
         {
@@ -534,6 +574,9 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
             self.drain_gossip();
             let result = self.pipeline.step(self.safe_head).await;
             steps += 1;
+            if matches!(result, StepResult::AdvancedOrigin) {
+                self.observe_pipeline_origin();
+            }
             if matches!(result, StepResult::PreparedAttributes)
                 && let Some(attrs) = self.pipeline.next()
             {
@@ -672,6 +715,9 @@ impl<P: Pipeline + SignalReceiver + Debug + Send> TestRollupNode<P> {
 
         // Advance the safe head using the block hash returned by the engine.
         let derived_from = attrs.derived_from;
+        if derived_from.is_some() {
+            self.finalizer.enqueue_for_finalization(&attrs);
+        }
         let l1_origin = self
             .l1_origin_from_attrs(&attrs)
             .or_else(|| attrs.derived_from.map(|b| BlockNumHash { hash: b.hash, number: b.number }))
