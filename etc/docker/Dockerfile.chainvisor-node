@@ -2,8 +2,10 @@
 # Base node for the chainvisor writer host: execution, consensus, basectl and
 # cvsd-export from this fork, one image for both compose services.
 ARG RUST_VERSION=1.96.0
+ARG PROFILE=release
 
 FROM public.ecr.aws/docker/library/rust:${RUST_VERSION}-trixie AS builder
+ARG PROFILE
 WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -16,11 +18,11 @@ COPY . .
 RUN --mount=type=cache,id=chainvisor-node-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=chainvisor-node-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=chainvisor-node-target,target=/app/target,sharing=locked \
-    cargo build --locked --profile maxperf \
+    cargo build --profile "$PROFILE" \
       --bin base-reth-node --bin base-consensus --bin basectl --bin cvsd-export && \
     mkdir -p /out && \
-    cp target/maxperf/base-reth-node target/maxperf/base-consensus \
-       target/maxperf/basectl target/maxperf/cvsd-export /out/
+    cp "target/$PROFILE/base-reth-node" "target/$PROFILE/base-consensus" \
+       "target/$PROFILE/basectl" "target/$PROFILE/cvsd-export" Cargo.lock /out/
 
 FROM ubuntu:24.04
 RUN apt-get update && \
