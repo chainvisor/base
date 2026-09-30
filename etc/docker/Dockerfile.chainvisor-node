@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
-# Base node for the chainvisor writer host: execution, consensus, basectl and
-# cvsd-export from this fork, one image for both compose services.
+# Base node for the chainvisor writer host: execution, consensus and cvsd-export
+# from this fork, one image for both compose services. No basectl: it links the
+# SP1 prover, whose build needs Go.
 ARG RUST_VERSION=1.96.0
 ARG PROFILE=release
 
@@ -19,10 +20,10 @@ RUN --mount=type=cache,id=chainvisor-node-registry,target=/usr/local/cargo/regis
     --mount=type=cache,id=chainvisor-node-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=chainvisor-node-target,target=/app/target,sharing=locked \
     cargo build --profile "$PROFILE" \
-      --bin base-reth-node --bin base-consensus --bin basectl --bin cvsd-export && \
+      --bin base-reth-node --bin base-consensus --bin cvsd-export && \
     mkdir -p /out && \
     cp "target/$PROFILE/base-reth-node" "target/$PROFILE/base-consensus" \
-       "target/$PROFILE/basectl" "target/$PROFILE/cvsd-export" Cargo.lock /out/
+       "target/$PROFILE/cvsd-export" Cargo.lock /out/
 
 FROM ubuntu:24.04
 RUN apt-get update && \
