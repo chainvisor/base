@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use base_protocol::{AttributesWithParent, BlockInfo};
+use alloy_primitives::B256;
+use base_protocol::{AttributesWithParent, BlockInfo, L2BlockInfo};
 
 /// An internal type alias for L1 block numbers.
 type L1BlockNumber = u64;
@@ -10,22 +11,38 @@ type L1BlockNumber = u64;
 /// An internal type alias for L2 block numbers.
 type L2BlockNumber = u64;
 
+/// A finalization candidate: the hash of the L1 block its L2 blocks were derived from, and the
+/// highest L2 block number derived from that L1 block.
+type Candidate = (B256, L2BlockNumber);
+
 /// The [`L2Finalizer`] is responsible for tracking L2 blocks derived from L1 blocks and
 /// determining which L2 blocks can be finalized when L1 blocks are finalized.
 ///
 /// It maintains a queue of derived L2 blocks that are awaiting finalization, and returns
 /// the L2 block numbers that can be finalized as new finalized L1 blocks are received.
+///
+/// Every candidate in `awaiting_finalization` was derived from an L1 block that the pipeline's
+/// current L1 traversal passed. The traversal starts from the reset origin (fetched by number
+/// from L1) and advances one parent-hash-checked block at a time, so that is the same chain the
+/// finalized L1 signal is compared against. A derivation reset keeps this invariant: candidates
+/// produced by the pre-reset traversal are held in `unverified` and only return to
+/// `awaiting_finalization` once the post-reset traversal passes their L1 block with the same
+/// hash.
 #[derive(Debug, Default)]
 pub struct L2Finalizer {
-    /// A map of `L1 block number -> highest derived L2 block number` within the L1 epoch, used to
+    /// A map of `L1 block number -> (L1 block hash, highest derived L2 block number)`, used to
     /// track derived [`AttributesWithParent`] awaiting finalization. When a new finalized L1
     /// block is received, the highest L2 block whose inputs are contained within the finalized
     /// L1 chain is finalized.
-    awaiting_finalization: BTreeMap<L1BlockNumber, L2BlockNumber>,
+    awaiting_finalization: BTreeMap<L1BlockNumber, Candidate>,
+    /// Candidates carried across a derivation reset whose L1 block the post-reset traversal has
+    /// not passed yet. They are never finalized from here; see [`Self::observe_l1_origin`].
+    unverified: BTreeMap<L1BlockNumber, Candidate>,
     /// The highest finalized L1 block observed by the finalizer.
     ///
-    /// This survives derivation resets so that re-derived L2 blocks can be finalized without
-    /// waiting for the L1 watcher to emit the same finalized block again.
+    /// This survives derivation resets so that re-derived L2 blocks, and carried candidates the
+    /// post-reset traversal re-verifies, can be finalized without waiting for the L1 watcher to
+    /// emit the same finalized block again.
     finalized_l1_block: Option<BlockInfo>,
 }
 
@@ -34,14 +51,22 @@ impl L2Finalizer {
     /// block is observed that is `>=` the height of [`AttributesWithParent::derived_from`], the
     /// L2 block associated with the payload attributes will be finalized.
     pub fn enqueue_for_finalization(&mut self, attributes: &AttributesWithParent) {
+        let derived_from = attributes
+            .derived_from
+            .expect("Fatal: Cannot enqueue attributes for finalization that weren't derived");
+        let block_number = attributes.block_number();
         self.awaiting_finalization
-            .entry(
-                attributes.derived_from.map(|b| b.number).expect(
-                    "Fatal: Cannot enqueue attributes for finalization that weren't derived",
-                ),
-            )
-            .and_modify(|n| *n = (*n).max(attributes.block_number()))
-            .or_insert_with(|| attributes.block_number());
+            .entry(derived_from.number)
+            .and_modify(|(hash, highest)| {
+                if *hash == derived_from.hash {
+                    *highest = (*highest).max(block_number);
+                } else {
+                    // The current traversal decides which L1 block sits at this height.
+                    *hash = derived_from.hash;
+                    *highest = block_number;
+                }
+            })
+            .or_insert((derived_from.hash, block_number));
     }
 
     /// Records a finalized L1 block and attempts to finalize any eligible L2 blocks.
@@ -69,9 +94,45 @@ impl L2Finalizer {
         self.try_finalize_next(self.finalized_l1_block?)
     }
 
-    /// Clears reset-sensitive derived-block tracking while preserving the finalized L1 signal.
-    pub fn clear(&mut self) {
-        self.awaiting_finalization.clear();
+    /// Handles a derivation reset to `safe_head`, preserving the finalized L1 signal.
+    ///
+    /// Candidates above the reset safe head are dropped: derivation re-derives those L2 blocks
+    /// and enqueues them again. Candidates at or below it are kept as unverified, because the
+    /// pre-reset traversal that produced them may have followed L1 blocks that were reorged out.
+    /// [`Self::observe_l1_origin`] releases or drops them as the post-reset traversal advances.
+    pub fn reset(&mut self, safe_head: &L2BlockInfo) {
+        let safe = safe_head.block_info.number;
+        let mut carried = std::mem::take(&mut self.awaiting_finalization);
+        carried.append(&mut self.unverified);
+        carried.retain(|_, (_, highest)| *highest <= safe);
+        self.unverified = carried;
+    }
+
+    /// Records that the L1 traversal reached `origin`. Returns `true` when a carried candidate
+    /// became finalizable again, so the caller can retry it against the retained finalized L1
+    /// signal ([`Self::try_finalize_pending`]).
+    ///
+    /// The traversal reports every block it advances to, in order. A carried candidate at this
+    /// height with the same hash was derived from a block on the chain the traversal follows now,
+    /// so it is finalizable again, exactly like a freshly derived candidate. A different hash
+    /// means the pre-reset traversal left that chain at or below this height: the candidate and
+    /// every carried candidate above it were derived from the orphaned block or its descendants,
+    /// so all of them are dropped. Carried candidates below this height were never matched and
+    /// can no longer be verified; they are dropped too.
+    pub fn observe_l1_origin(&mut self, origin: BlockInfo) -> bool {
+        if self.unverified.is_empty() {
+            return false;
+        }
+        self.unverified = self.unverified.split_off(&origin.number);
+        let Some((hash, highest)) = self.unverified.remove(&origin.number) else {
+            return false;
+        };
+        if hash != origin.hash {
+            self.unverified.clear();
+            return false;
+        }
+        self.awaiting_finalization.insert(origin.number, (hash, highest));
+        true
     }
 
     /// Attempts to find L2 blocks that can be finalized based on the new finalized L1 block.
@@ -82,16 +143,17 @@ impl L2Finalizer {
         &mut self,
         new_finalized_l1_block: BlockInfo,
     ) -> Option<L2BlockNumber> {
+        let finalized = new_finalized_l1_block.number;
+
         // Find the highest safe L2 block that is contained within the finalized chain,
         // that the finalizer is aware of.
-        let highest_safe =
-            self.awaiting_finalization.range(..=new_finalized_l1_block.number).next_back();
+        let highest_safe = self.awaiting_finalization.range(..=finalized).next_back();
 
         // If the highest safe block is found, return it and drain the
         // queue of all L1 blocks not contained in the finalized L1 chain.
-        if let Some((_, highest_safe_number)) = highest_safe {
+        if let Some((_, (_, highest_safe_number))) = highest_safe {
             let result = *highest_safe_number;
-            self.awaiting_finalization.retain(|&number, _| number > new_finalized_l1_block.number);
+            self.awaiting_finalization.retain(|&number, _| number > finalized);
             Some(result)
         } else {
             None
@@ -104,6 +166,7 @@ mod tests {
     //! Unit tests for [`L2Finalizer`] queue management.
 
     use alloy_eips::BlockNumHash;
+    use alloy_primitives::B256;
     use base_common_rpc_types_engine::BasePayloadAttributes;
     use base_protocol::{AttributesWithParent, BlockInfo, L2BlockInfo};
 
@@ -129,6 +192,38 @@ mod tests {
     /// Build a [`BlockInfo`] representing a finalized L1 block at `number`.
     fn l1_at(number: u64) -> BlockInfo {
         BlockInfo { number, ..Default::default() }
+    }
+
+    /// An L1 block at `number` on `branch`. Equal arguments give equal hashes; different
+    /// branches give different hashes at the same height.
+    fn l1(number: u64, branch: u8) -> BlockInfo {
+        let mut hash = B256::left_padding_from(&number.to_be_bytes());
+        hash.0[0] = branch;
+        BlockInfo { number, hash, ..Default::default() }
+    }
+
+    /// Attributes for L2 block `l2_number` derived from the L1 block `derived_from`.
+    fn derived(l2_number: u64, derived_from: BlockInfo) -> AttributesWithParent {
+        let parent = L2BlockInfo {
+            block_info: BlockInfo { number: l2_number - 1, ..Default::default() },
+            l1_origin: BlockNumHash::default(),
+            seq_num: 0,
+        };
+        AttributesWithParent::new(
+            BasePayloadAttributes::default(),
+            parent,
+            Some(derived_from),
+            false,
+        )
+    }
+
+    /// The L2 safe head a derivation reset rewinds to.
+    fn safe_head(number: u64) -> L2BlockInfo {
+        L2BlockInfo {
+            block_info: BlockInfo { number, ..Default::default() },
+            l1_origin: BlockNumHash::default(),
+            seq_num: 0,
+        }
     }
 
     #[test]
@@ -189,21 +284,86 @@ mod tests {
     }
 
     #[test]
-    fn clear_empties_queue() {
+    fn reset_holds_candidates_until_retraversal_reaches_them() {
         let mut f = L2Finalizer::default();
-        f.enqueue_for_finalization(&attrs(4, 1));
-        f.enqueue_for_finalization(&attrs(7, 2));
-        f.clear();
-        assert!(f.try_finalize_next(l1_at(100)).is_none());
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.reset(&safe_head(10));
+        f.observe_l1_origin(l1(4, 1));
+        // The post-reset traversal has not reached height 5 yet.
+        assert!(f.try_finalize_next(l1(5, 1)).is_none());
     }
 
     #[test]
-    fn clear_preserves_finalized_l1_signal() {
+    fn carried_candidate_is_released_when_retraversal_matches_its_hash() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.reset(&safe_head(10));
+        f.observe_l1_origin(l1(4, 1));
+        f.observe_l1_origin(l1(5, 1));
+        assert_eq!(f.try_finalize_next(l1(5, 1)), Some(10));
+    }
+
+    #[test]
+    fn reset_drops_candidates_above_reset_safe_head() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.enqueue_for_finalization(&derived(20, l1(6, 1)));
+        f.reset(&safe_head(10));
+        f.observe_l1_origin(l1(5, 1));
+        f.observe_l1_origin(l1(6, 1));
+        assert_eq!(f.try_finalize_next(l1(6, 1)), Some(10));
+        assert!(f.try_finalize_next(l1(100, 1)).is_none());
+    }
+
+    #[test]
+    fn reorged_inclusion_block_and_candidates_above_it_are_never_finalized() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.enqueue_for_finalization(&derived(20, l1(6, 1)));
+        f.enqueue_for_finalization(&derived(30, l1(7, 1)));
+        f.reset(&safe_head(30));
+        f.observe_l1_origin(l1(5, 1));
+        // L1 reorged at height 6: the post-reset traversal follows branch 2 from here on.
+        f.observe_l1_origin(l1(6, 2));
+        f.observe_l1_origin(l1(7, 2));
+        assert_eq!(f.try_finalize_next(l1(7, 2)), Some(10));
+        assert!(f.try_finalize_next(l1(100, 2)).is_none());
+    }
+
+    #[test]
+    fn carried_candidates_below_the_retraversal_start_are_dropped() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.enqueue_for_finalization(&derived(20, l1(8, 1)));
+        f.reset(&safe_head(20));
+        // The reset walked the origin back to height 7, so height 5 is never re-observed.
+        f.observe_l1_origin(l1(7, 1));
+        assert!(f.try_finalize_next(l1(6, 1)).is_none());
+        f.observe_l1_origin(l1(8, 1));
+        assert_eq!(f.try_finalize_next(l1(8, 1)), Some(20));
+    }
+
+    #[test]
+    fn candidates_derived_after_reset_finalize_normally() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.reset(&safe_head(10));
+        f.observe_l1_origin(l1(5, 1));
+        f.enqueue_for_finalization(&derived(11, l1(5, 1)));
+        f.observe_l1_origin(l1(6, 1));
+        f.enqueue_for_finalization(&derived(12, l1(6, 1)));
+        assert_eq!(f.try_finalize_next(l1(5, 1)), Some(11));
+        assert_eq!(f.try_finalize_next(l1(6, 1)), Some(12));
+    }
+
+    #[test]
+    fn reset_preserves_finalized_l1_signal() {
         let mut f = L2Finalizer::default();
         f.process_finalized_l1_block(l1_at(5));
         f.enqueue_for_finalization(&attrs(4, 1));
 
-        f.clear();
+        // The reset rewinds below L2 block 5, so its candidate is dropped and re-derived.
+        f.reset(&safe_head(4));
         f.enqueue_for_finalization(&attrs(9, 5));
 
         assert_eq!(f.try_finalize_pending(), Some(10));
@@ -241,5 +401,74 @@ mod tests {
         f.enqueue_for_finalization(&attrs(9, 4));
 
         assert_eq!(f.try_finalize_pending(), Some(10));
+    }
+
+    #[test]
+    fn reverified_candidates_finalize_against_the_retained_signal() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.enqueue_for_finalization(&derived(20, l1(7, 1)));
+        f.reset(&safe_head(20));
+        // The finalized signal arrives while every candidate is parked: nothing is finalized.
+        assert!(f.process_finalized_l1_block(l1(7, 1)).is_none());
+
+        assert!(f.observe_l1_origin(l1(5, 1)));
+        assert_eq!(f.try_finalize_pending(), Some(10));
+        assert!(!f.observe_l1_origin(l1(6, 1)));
+        assert!(f.try_finalize_pending().is_none());
+        assert!(f.observe_l1_origin(l1(7, 1)));
+        assert_eq!(f.try_finalize_pending(), Some(20));
+    }
+
+    #[test]
+    fn retained_signal_never_finalizes_a_candidate_from_an_orphaned_block() {
+        let mut f = L2Finalizer::default();
+        f.enqueue_for_finalization(&derived(10, l1(5, 1)));
+        f.enqueue_for_finalization(&derived(20, l1(6, 1)));
+        f.reset(&safe_head(20));
+        assert!(f.process_finalized_l1_block(l1(6, 2)).is_none());
+
+        assert!(f.observe_l1_origin(l1(5, 1)));
+        assert_eq!(f.try_finalize_pending(), Some(10));
+        // L1 reorged at height 6: the candidate derived from the orphaned block is dropped.
+        assert!(!f.observe_l1_origin(l1(6, 2)));
+        assert!(f.try_finalize_pending().is_none());
+    }
+
+    /// Replays the Base mainnet L1 reorg of 2026-09-30: L1 block 26090572 was orphaned after
+    /// L2 blocks 51992616..=51992630 had been derived from it, and derivation reset to safe head
+    /// 51992630. Candidates (L1 inclusion block -> highest L2 block) are the ones the writer's
+    /// logs show before the reset. Before this change the reset discarded all of them, so the
+    /// writer skipped the finalization of 51992615 that other nodes applied and stayed at
+    /// 51992245 until 51992815 finalized.
+    #[test]
+    fn l1_reorg_at_26090572_keeps_candidates_below_the_fork() {
+        const CANONICAL: u8 = 1;
+        const ORPHANED: u8 = 2;
+        let mut f = L2Finalizer::default();
+        for (l1_number, l2_number) in [
+            (26_090_554, 51_992_520),
+            (26_090_556, 51_992_533),
+            (26_090_559, 51_992_549),
+            (26_090_561, 51_992_566),
+            (26_090_564, 51_992_583),
+            (26_090_567, 51_992_601),
+            (26_090_570, 51_992_615),
+        ] {
+            f.enqueue_for_finalization(&derived(l2_number, l1(l1_number, CANONICAL)));
+        }
+        f.enqueue_for_finalization(&derived(51_992_630, l1(26_090_572, ORPHANED)));
+
+        f.reset(&safe_head(51_992_630));
+        for l1_number in 26_090_506..=26_090_572 {
+            f.observe_l1_origin(l1(l1_number, CANONICAL));
+        }
+        f.enqueue_for_finalization(&derived(51_992_815, l1(26_090_603, CANONICAL)));
+
+        assert_eq!(f.try_finalize_next(l1(26_090_556, CANONICAL)), Some(51_992_533));
+        assert_eq!(f.try_finalize_next(l1(26_090_570, CANONICAL)), Some(51_992_615));
+        // Nothing derived from the orphaned block is ever finalized.
+        assert!(f.try_finalize_next(l1(26_090_572, CANONICAL)).is_none());
+        assert_eq!(f.try_finalize_next(l1(26_090_603, CANONICAL)), Some(51_992_815));
     }
 }
