@@ -11,7 +11,7 @@ use reth_db::init_db;
 use reth_node_builder::NodeBuilder;
 use reth_node_core::{
     args::{
-        DatabaseArgs, DatadirArgs, DebugArgs, DevArgs, EngineArgs, EraArgs, MetricArgs,
+        DatabaseArgs, DatadirArgs, DebugArgs, DevArgs, EngineArgs, EraArgs, ExExArgs, MetricArgs,
         NetworkArgs, PruningArgs, RpcServerArgs, StaticFilesArgs, StorageArgs, TxPoolArgs,
     },
     node_config::NodeConfig,
@@ -99,6 +99,10 @@ pub struct ExecutionNodeConfigArgs {
     /// All storage related arguments with --storage prefix.
     #[command(flatten, next_help_heading = "Storage")]
     pub storage: StorageArgs,
+
+    /// All ExEx related arguments with --exex prefix.
+    #[command(flatten, next_help_heading = "ExEx")]
+    pub exex: ExExArgs,
 }
 
 impl ExecutionNodeConfigArgs {
@@ -121,6 +125,7 @@ impl ExecutionNodeConfigArgs {
             era,
             static_files,
             storage,
+            exex,
         } = self;
 
         let mut node_config = NodeConfig {
@@ -142,6 +147,7 @@ impl ExecutionNodeConfigArgs {
             static_files,
             storage,
             jit: Default::default(),
+            exex,
         };
 
         if node_config.network.max_inbound_peers.is_none() {
@@ -519,6 +525,20 @@ mod tests {
 
         assert_eq!(runtime.node_config.network.max_inbound_peers, Some(12));
         assert_eq!(runtime.node_config.network.max_outbound_peers, Some(34));
+    }
+
+    #[test]
+    fn runtime_config_carries_exex_wal_blocks_warning() {
+        let args = CommandParser::<ExecutionNodeConfigArgs>::parse_from([
+            "reth",
+            "--exex.wal-blocks-warning",
+            "10000",
+        ])
+        .args;
+
+        let runtime = args.into_runtime_config(Arc::new(BaseChainSpec::devnet()));
+
+        assert_eq!(runtime.node_config.exex.wal_blocks_warning, Some(10_000));
     }
 
     #[test]
